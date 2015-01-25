@@ -1,0 +1,305 @@
+---
+title: "PML Project January 2015"
+date: "January 23, 2015"
+output: html_document
+---
+
+# Cousera Practical Machine Learning Course January 2015.
+
+## Summary  
+
+This project analyses research on Human Activity Recognition in which body activity 
+is monitored. The web site 
+with the details of this research may be found 
+[here](http://groupware.les.inf.puc-rio.br/har#ixzz3H0CsS8z1). 
+In the data collected for this project, 
+six participants were asked to perform one set of 10 repetitions 
+of the Unilateral Dumbbell Biceps Curl in five different fashions:   
+1. exactly 
+according to the specification - class A in the data set;  
+2. throwing the elbows 
+to the front - 
+class B in the data set;  
+3. lifting the dumbbell only halfway - class C in the 
+data set;  
+4. lowering the dumbbell 
+only halfway - Class D in the data set; and,  
+5. throwing the hips to the front
+- class E in the data set. 
+
+The task in this project is, given a number of unclassified observations, 
+to determine to which class each observation belongs.  
+In order to do that, we are provided with two sets of data: a training set which 
+will be used to model the data,
+and a test set which will be used to test the model.  
+
+Code for accessing and loading the data follows.
+ 
+```{r libraries, echo=FALSE,message=FALSE}
+library(R.utils)
+library(ggplot2)
+library(caret)
+library(rattle)
+
+```
+
+
+```{r fileRead, cache = TRUE} 
+fileUrlTrain <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+if( !(file.exists("./pml-training.csv")) ){
+        download.file(fileUrlTrain,"./pml-training.csv", method="curl")
+}
+fileUrlTest <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+if( !(file.exists("./pml-testing.csv")) ){
+        download.file(fileUrlTest,"./pml-testing.csv", method="curl")
+}
+
+```
+
+
+```{r fileLoad, cache=TRUE}
+pmlTrain <- read.table("./pml-training.csv",header=TRUE,sep=",",na.strings=c("NA",""))
+pmlTest <- read.table("./pml-testing.csv",header=TRUE,sep=",",na.strings=c("NA",""))
+```
+
+
+## Data Description and Evaluation  
+
+The data consists of two data sets: a training set and a test set. 
+The training set consists of 19622 observations on 160 variables.
+The test set consists of 20 observations on 160 variables. 
+We investigate the columns in the data sets by comparing names and determine that the training set
+and the test set differ in the 160th column. The 160th column of the training 
+set is the response variable, **classe**. 
+The 160th column of the test set is **problem_id**.
+
+Investigating the completeness of the data in the training set, we see that it
+is rather sparse. 
+NAs appear in 39% of the fields.
+Further investigation indicates that the NAs appear in 100 columns and that in 
+each of these columns NAs occurs 98% of the time.
+We reduce the set used the construct the model by removing these columns.
+We also remove the first seven columns which contain administrative data.
+The modified training set used to construct the models will have 19622 rows and 
+53 columns.
+
+
+Code used in the invesitgation follows:  
+
+```{r description, cache=TRUE,collapse=TRUE}
+dim(pmlTrain)
+dim(pmlTest)  
+# how many NAs?
+trainNA <- sum(is.na(pmlTrain))
+trainNA
+testNA <- sum(is.na(pmlTest))
+testNA
+# What is the percentage of NA's
+trainNA / (dim(pmlTrain)[1] * dim(pmlTrain)[2])
+testNA / (dim(pmlTest)[1] * dim(pmlTest)[2])
+# check the column names
+trainNames <- names(pmlTrain)
+testNames <- names(pmlTest)
+identical(trainNames,testNames)
+# 
+# Function: difflist
+# Purpose: to compare the column names of two data frames to determine differences
+# Assumptions: Written to compare a training set with a testing set
+# Arguments: Two data frames
+# Returns: a logical vector where FALSE indicates a name difference
+#
+difflist <- function(x,y){
+        diffs <- NULL
+        if (length(x) != length(y)) return(diffs)
+        for( ndx in 1:length(x)) {
+         diffs[ndx] <- x[ndx]==y[ndx]
+        }
+        return(diffs)
+}
+#
+diffNames <- difflist(trainNames,testNames)
+# how many column names are different?
+sum(diffNames)
+# where do the column names differ?
+diffndx <- which(diffNames == FALSE)
+diffndx
+# what are the names where they differ?
+trainNames[diffndx]
+testNames[diffndx]
+#
+```
+
+```{r aside1, cache =TRUE, echo=FALSE,results='hide'}
+# curious as to the number of observations in each class
+trainClasses <- pmlTrain$classe
+numA <- sum(trainClasses=="A")
+numA
+numB <- sum(trainClasses=="B")
+numB
+numC <- sum(trainClasses=="C")
+numC
+numD <- sum(trainClasses=="D")
+numD
+numE <- sum(trainClasses=="E")
+numE
+numA + numB + numC + numD + numE
+#
+```
+
+
+```{r investigate, cache=TRUE, collapse=TRUE}
+#
+# Function: countNAs
+# Purpose: To is to determine the number of NAs in each 
+# column of a data frame.
+# Arguments:
+#       x is a data frame
+#       y is the number of columns in the data frame
+#
+countNAs <- function(x,y){ 
+        out <- NULL
+        for(ndx in 1:y){ 
+                out[ndx] <- sum(is.na(x[,ndx]))
+        }
+        return(out)
+}
+#
+# A list of the number of NAs in the columns of the training set.
+trainNA <- countNAs(pmlTrain,dim(pmlTrain)[2])
+# What are the unique values for the number of NAs in the columns of the training set.
+unique(trainNA)
+# A list of indicies of columns from the training set that contain NAs.
+trainNdxNA <- which(trainNA != 0)
+# The number of columns of the traing set that contain NAs.
+dim(pmlTrain)[2] - length(trainNdxNA)
+# A data frame that contains the columns from the training set that contain NAs.
+pmlTrainNAs <- pmlTrain[,trainNdxNA]
+numNAsPerColumn <- countNAs(pmlTrainNAs,dim(pmlTrainNAs)[2])
+numNAs <- unique(numNAsPerColumn)
+numNAs
+dim(pmlTrain)[1] - numNAs
+```
+
+## Model Construction
+
+The first model constructed uses classification trees.  
+Our first step is to reduce the data set as discussed previously. 
+
+```{r smalldata, cache=TRUE}
+# first get rid of the columns with NAs
+pmlTrainSmall <- pmlTrain[-trainNdxNA]
+# get rid of first 7 columns
+pmlTrainSmall <- pmlTrainSmall[,-c(1:7)]
+
+```
+
+
+###  A Classification Tree Model.  
+
+Now we fit the model using a classification tree with the **rpart** method
+from the caret package. 
+We use all 52 predictor variables for the model. 
+The graph of the classification tree is included below.
+
+Using the model to predict the classification on the training set, 
+we see that this model in not very accurate. 
+The in sample error is 
+approximately 50%.  
+
+As the classification tree predicts an observation as the most commonly 
+occurring class of training observations in the region that the observation
+to be predicted belongs, we can see from the confusion matrix below that the 
+classification
+error rate as given by the fraction of training observations in the region 
+that do not belong to the class is significant for classes A, B, and C.
+Also the tree fails to predict any observation of class D which is 
+problematic as we know that 3216 observations in the training set are in 
+class D.  
+
+We need to use a better classification method.
+
+Code for the classification tree model follows:  
+
+```{r rpart, cache=TRUE, eval=TRUE, collapse=TRUE}
+# 
+fit <- train(classe~.,method="rpart",data=pmlTrainSmall)
+fit$finalModel
+# plot the final model
+fancyRpartPlot(fit$finalModel)
+# What is the in sample error
+trainfit <- predict(fit,pmlTrain)
+trainfittbl <- table(trainfit,pmlTrain$classe)
+numright <- trainfittbl[1,1]+trainfittbl[2,2]+trainfittbl[3,3]+trainfittbl[4,4]+trainfittbl[5,5]
+numright
+# calculate the percentage accurate on the training set
+numright/dim(pmlTrain)[1]
+# predict on the test set
+testfit <- predict(fit,pmlTest)
+testfit
+```
+
+```{r confused, cache=TRUE}
+cm <- confusionMatrix(trainfit,pmlTrain$classe)
+cm
+```
+
+### A Random Forest Model
+
+In order to improve accuracy we construct a model using random forests. 
+Again we use all 52 predictors to compute the model.
+The in sample error rate for this model is 0%.
+This is of some concern as we may hove overfit the data; however, when we
+classified the test data all answers were accepted as correct.
+
+We graph the accuracy of the random forest method determined during the resampling
+that occurs during the model fitting. This will give us an estimate of in sample 
+error.
+
+In an attempt to reduce the size of the model, we use **varImp** to determine
+the importance of the predictors. 
+We then fit another random forest using the top 9 predictors indicated by
+**varImp**. 
+This fit also identifies every observation in the training set correctly.
+The predictions on the test set by both random forest models are identical.
+
+```{r randomForest, cache=TRUE, collaspe=TRUE}
+# takes a very long time
+rffit <- train(classe~.,method="rf",data=pmlTrainSmall)
+rfpred <- predict(rffit,pmlTrain)
+rftbl <- table(rfpred,pmlTrain$classe)
+rftbl
+rftestpred <- predict(rffit,pmlTest)
+rftestpred
+
+```
+
+
+```{r ancillary, cache=TRUE, collaspe=TRUE}
+ggplot(rffit, metric="Accuracy")
+varImp(rffit)
+```
+
+
+```{r smallfit, cache=TRUE,collaspe=TRUE}
+rffitSmall <- train(classe~roll_belt+yaw_belt+magnet_dumbbell_z+magnet_dumbbell_y+pitch_belt+pitch_forearm+magnet_dumbbell_x+roll_forearm,method="rf",data=pmlTrainSmall)
+rfSmallPred <- predict(rffitSmall,pmlTrain)
+table(rfSmallPred,pmlTrain$classe)
+rfSmallPredTest <- predict(rffitSmall,pmlTest)
+rfSmallPredTest
+varImp(rffitSmall)
+```
+
+
+## Conclusion
+
+For this project, we analyze the data and selected a subset that would 
+best contribute to a prediction model.
+We first used a classification tree to model the data, but determined that the
+fit produced was not very good.
+Then we tried two random forest models which fit the data extremely well. 
+Not only did these models fit the training data exactly but they also 
+produced the same classifications on the test set. 
+This classification was accepted by the grading progam in the course.  
+Because of the possibility of overfitting it would be interesting to apply
+these models to additional data.
+
